@@ -7,6 +7,11 @@ use serde::Deserialize;
 
 #[tokio::test]
 async fn test_client() -> anyhow::Result<()> {
+    // initialize tracing
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
+
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let app = generate_router(Settings {

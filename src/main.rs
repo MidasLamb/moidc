@@ -6,8 +6,6 @@ async fn main() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
 
-    //let settings = settings::read_settings();
-    use tower_http::trace::TraceLayer;
 
     let app = generate_router(moidc::settings::Settings {
         base_url: "http://localhost:3000".to_string(),

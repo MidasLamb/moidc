@@ -33,12 +33,7 @@ struct State {
 }
 
 pub async fn generate_router(settings: settings::Settings) -> Router {
-    // initialize tracing
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .init();
 
-    //let settings = settings::read_settings();
     use tower_http::trace::TraceLayer;
 
     let private = tokio::fs::read_to_string("./private-key.pem")
