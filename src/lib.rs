@@ -48,7 +48,6 @@ pub async fn generate_router(settings: settings::Settings) -> Router {
     };
 
     let app = Router::new()
-        .route("/", get(root))
         .route("/authorize", get(authorize))
         .route("/token", post(token_handler))
         .route("/.well-known/jwks", get(jwks))
@@ -62,9 +61,6 @@ pub async fn generate_router(settings: settings::Settings) -> Router {
     app
 }
 
-async fn root() -> &'static str {
-    "Hello, World!"
-}
 #[axum::debug_handler]
 async fn token_handler(
     Extension(state): Extension<Arc<State>>,
@@ -76,11 +72,12 @@ async fn token_handler(
 #[derive(Debug, Deserialize)]
 struct TokenRequest {
     code: String,
-    code_verifier: String,
-    grant_type: String,
-    redirect_uri: String,
+    code_verifier: Option<String>,
+    grant_type: Option<String>,
+    redirect_uri: Option<String>,
 }
 
+#[tracing::instrument(skip(state))]
 async fn token_handler_int(
     state: &State,
     Form(token_request): Form<TokenRequest>,
@@ -117,14 +114,18 @@ async fn token_handler_int(
             .expect("Invalid RSA private key"),
         CoreJwsSigningAlgorithm::RsaSsaPssSha256,
         Some(&access_token),
-        None,
+        Some(&openidconnect::AuthorizationCode::new(token_request.code)),
     )?;
-
-    Ok(Json(CoreTokenResponse::new(
+   
+    let token_response = CoreTokenResponse::new(
         access_token,
         CoreTokenType::Bearer,
         CoreIdTokenFields::new(Some(id_token), EmptyExtraTokenFields {}),
-    )))
+    );
+
+    tracing::warn!(?token_response, "Sending the token response!");
+
+    Ok(Json(token_response))
 }
 
 #[derive(Deserialize, Debug)]
