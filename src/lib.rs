@@ -181,7 +181,7 @@ async fn authorize(Query(auth): Query<AuthorizeQuery>) -> Redirect {
     }
     .to_url_query_parameter();
     Redirect::to(&format!(
-        "{}?state={}&code={}",
+        "{}?state={}&code={}&session_state=1234",
         auth.redirect_uri, auth.state, code
     ))
 }
