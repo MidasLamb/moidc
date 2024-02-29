@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use axum::{
     extract::{Query, Request},
@@ -15,15 +15,17 @@ use rsa::RsaPrivateKey;
 use chrono::{Duration, Utc};
 use openidconnect::{
     core::{
-        CoreIdToken, CoreIdTokenClaims, CoreIdTokenFields, CoreJsonWebKey, CoreJsonWebKeySet,
+        CoreGenderClaim, CoreIdToken, CoreIdTokenClaims, CoreIdTokenFields, CoreJsonWebKey,
+        CoreJsonWebKeySet, CoreJsonWebKeyType, CoreJweContentEncryptionAlgorithm,
         CoreJwsSigningAlgorithm, CoreProviderMetadata, CoreResponseType, CoreRsaPrivateSigningKey,
         CoreSubjectIdentifierType, CoreTokenResponse, CoreTokenType,
     },
     AccessToken, Audience, AuthUrl, EmptyAdditionalClaims, EmptyAdditionalProviderMetadata,
-    EmptyExtraTokenFields, EndUserEmail, IssuerUrl, JsonWebKeyId, JsonWebKeySetUrl, Nonce,
-    ResponseTypes, StandardClaims, SubjectIdentifier, TokenUrl,
+    EmptyExtraTokenFields, EndUserEmail, IdToken, IdTokenClaims, IdTokenFields, IssuerUrl,
+    JsonWebKeyId, JsonWebKeySetUrl, Nonce, ResponseTypes, StandardClaims, StandardTokenResponse,
+    SubjectIdentifier, TokenUrl,
 };
-use serde::{Deserialize, Serialize};
+use serde::{ser::SerializeMap, Deserialize, Serialize};
 
 pub mod settings;
 
@@ -33,7 +35,6 @@ struct State {
 }
 
 pub async fn generate_router(settings: settings::Settings) -> Router {
-
     use tower_http::trace::TraceLayer;
 
     let private = tokio::fs::read_to_string("./private-key.pem")
@@ -65,7 +66,7 @@ pub async fn generate_router(settings: settings::Settings) -> Router {
 async fn token_handler(
     Extension(state): Extension<Arc<State>>,
     f: Form<TokenRequest>,
-) -> Json<CoreTokenResponse> {
+) -> Json<MyTokenResponse> {
     token_handler_int(&*state, f).await.unwrap()
 }
 
@@ -77,11 +78,47 @@ struct TokenRequest {
     redirect_uri: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct MyAdditionalClaims {
+    groups: Vec<String>,
+}
+
+impl openidconnect::AdditionalClaims for MyAdditionalClaims {}
+
+impl serde::Serialize for MyAdditionalClaims {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(1))?;
+        map.serialize_entry("groups", &self.groups)?;
+        map.end()
+    }
+}
+
+type MyIdTokenClaims = IdTokenClaims<MyAdditionalClaims, CoreGenderClaim>;
+type MyIdTokenFields = IdTokenFields<
+    MyAdditionalClaims,
+    EmptyExtraTokenFields,
+    CoreGenderClaim,
+    CoreJweContentEncryptionAlgorithm,
+    CoreJwsSigningAlgorithm,
+    CoreJsonWebKeyType,
+>;
+type MyIdToken = IdToken<
+    MyAdditionalClaims,
+    CoreGenderClaim,
+    CoreJweContentEncryptionAlgorithm,
+    CoreJwsSigningAlgorithm,
+    CoreJsonWebKeyType,
+>;
+type MyTokenResponse = StandardTokenResponse<MyIdTokenFields, CoreTokenType>;
+
 #[tracing::instrument(skip(state))]
 async fn token_handler_int(
     state: &State,
     Form(token_request): Form<TokenRequest>,
-) -> anyhow::Result<Json<CoreTokenResponse>> {
+) -> anyhow::Result<Json<MyTokenResponse>> {
     let secret_document = state
         .rsa_private_key
         .to_pkcs1_pem(rsa::pkcs8::LineEnding::LF)
@@ -93,22 +130,39 @@ async fn token_handler_int(
 
     let access_token = AccessToken::new("some_secret".to_string());
 
-    let token_claims = CoreIdTokenClaims::new(
+    let email = code_state.user_to_log_in;
+    let (first, domain) = email.split_once('@').unwrap();
+    let (normal_email, additional_things) = first.split_once('+').unwrap_or((first, ""));
+    let reconstructed_email = format!("{}@{}", normal_email, domain);
+    let mut groups = state
+        .settings
+        .per_user_settings
+        .get(&reconstructed_email)
+        .map(|pus| pus.groups.clone())
+        .unwrap_or(vec![]);
+    for additional in additional_things.split('+') {
+        if let Some(group_name) = additional.strip_prefix("g.") {
+            groups.push(group_name.to_string());
+        }
+    }
+
+    let token_claims = MyIdTokenClaims::new(
         IssuerUrl::new(base_url.to_string())?,
         vec![Audience::new(code_state.client_id)],
         Utc::now() + Duration::seconds(300),
         Utc::now(),
         StandardClaims::new(SubjectIdentifier::new(
-            "5f83e0ca-2b8e-4e8c-ba0a-f80fe9bc3632".to_string(),
+            // TODO: Make this some hash of the username? That way it's constant for the user
+            uuid::Uuid::new_v4().as_hyphenated().to_string(),
         ))
-        .set_email(Some(EndUserEmail::new(code_state.user_to_log_in)))
+        .set_email(Some(EndUserEmail::new(reconstructed_email)))
         .set_email_verified(Some(true)),
-        EmptyAdditionalClaims {},
+        MyAdditionalClaims { groups: vec![] },
     );
 
     let token_claims = token_claims.set_nonce(Some(Nonce::new(code_state.nonce)));
 
-    let id_token = CoreIdToken::new(
+    let id_token = MyIdToken::new(
         token_claims,
         &CoreRsaPrivateSigningKey::from_pem(&secret_document, None)
             .expect("Invalid RSA private key"),
@@ -116,11 +170,11 @@ async fn token_handler_int(
         Some(&access_token),
         Some(&openidconnect::AuthorizationCode::new(token_request.code)),
     )?;
-   
-    let token_response = CoreTokenResponse::new(
+
+    let token_response = MyTokenResponse::new(
         access_token,
         CoreTokenType::Bearer,
-        CoreIdTokenFields::new(Some(id_token), EmptyExtraTokenFields {}),
+        MyIdTokenFields::new(Some(id_token), EmptyExtraTokenFields {}),
     );
 
     tracing::warn!(?token_response, "Sending the token response!");
@@ -164,8 +218,8 @@ impl CodeState {
     }
 }
 
+#[tracing::instrument]
 async fn authorize(Query(auth): Query<AuthorizeQuery>) -> Redirect {
-    tracing::warn!("Authorizeing");
     // Do something and redirect back, with a code!
     // In order to be stateless, we must pass some state along here, so we can
     // give a proper response once they call to exchange the token for proper idtoken etc.

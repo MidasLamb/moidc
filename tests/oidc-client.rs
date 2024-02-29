@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, collections::HashMap};
 
 use axum::{extract::Query, routing::get, Extension, Router};
 use moidc::{generate_router, settings::Settings};
@@ -17,6 +17,7 @@ async fn test_client() -> anyhow::Result<()> {
     let app = generate_router(Settings {
         base_url: format!("http://localhost:{}", addr.port()),
         port: addr.port(),
+        per_user_settings: HashMap::new(),
     })
     .await;
 
