@@ -16,6 +16,7 @@ async fn test_client() -> anyhow::Result<()> {
     let addr = listener.local_addr().unwrap();
     let app = generate_router(Settings {
         base_url: format!("http://localhost:{}", addr.port()),
+        port: addr.port(),
     })
     .await;
 
