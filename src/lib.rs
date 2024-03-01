@@ -157,7 +157,7 @@ async fn token_handler_int(
         ))
         .set_email(Some(EndUserEmail::new(reconstructed_email)))
         .set_email_verified(Some(true)),
-        MyAdditionalClaims { groups: vec![] },
+        MyAdditionalClaims { groups },
     );
 
     let token_claims = token_claims.set_nonce(Some(Nonce::new(code_state.nonce)));
