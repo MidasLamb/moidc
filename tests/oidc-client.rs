@@ -1,7 +1,8 @@
-use std::{sync::Arc, collections::HashMap};
+use std::{collections::HashMap, sync::Arc};
 
 use axum::{extract::Query, routing::get, Extension, Router};
 use moidc::{generate_router, settings::Settings};
+use openidconnect::url;
 use rand::{distributions::DistString, Rng};
 use serde::Deserialize;
 
@@ -14,8 +15,10 @@ async fn test_client() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let base_url =
+        url::Url::parse(&format!("http://localhost:{}", addr.port())).expect("should be valid url");
     let app = generate_router(Settings {
-        base_url: format!("http://localhost:{}", addr.port()),
+        base_url: base_url.clone(),
         port: addr.port(),
         per_user_settings: HashMap::new(),
     })
@@ -65,11 +68,9 @@ async fn test_client() -> anyhow::Result<()> {
 
     // Use OpenID Connect Discovery to fetch the provider metadata.
     use openidconnect::{OAuth2TokenResponse, TokenResponse};
-    let provider_metadata = CoreProviderMetadata::discover_async(
-        IssuerUrl::new(format!("http://localhost:{}", addr.port()))?,
-        async_http_client,
-    )
-    .await?;
+    let provider_metadata =
+        CoreProviderMetadata::discover_async(IssuerUrl::from_url(base_url), async_http_client)
+            .await?;
 
     // Create an OpenID Connect client by specifying the client ID, client secret, authorization URL
     // and token URL.

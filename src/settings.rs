@@ -4,14 +4,13 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct Settings {
-    pub base_url: String,
+    pub base_url: openidconnect::url::Url,
     pub port: u16,
     #[serde(default)]
-    pub per_user_settings: HashMap<String, PerUserSettings>
+    pub per_user_settings: HashMap<String, PerUserSettings>,
 }
 
 #[derive(Deserialize)]
 pub struct PerUserSettings {
-    pub groups: Vec<String>
+    pub groups: Vec<String>,
 }
-

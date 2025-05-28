@@ -20,6 +20,7 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::new(0, 0, 0, 0), port))
         .await
         .unwrap();
+
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
