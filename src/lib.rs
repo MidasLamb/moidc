@@ -147,7 +147,7 @@ async fn token_handler_int(
     }
 
     let token_claims = MyIdTokenClaims::new(
-        IssuerUrl::new(base_url.to_string())?,
+        IssuerUrl::from_url(base_url.clone()),
         vec![Audience::new(code_state.client_id)],
         Utc::now() + Duration::seconds(300),
         Utc::now(),
@@ -269,9 +269,9 @@ async fn inner_well_known_openid_configuration(
 
     let provider_metadata = CoreProviderMetadata::new(
         // Parameters required by the OpenID Connect Discovery spec.
-        IssuerUrl::new(format!("{base_url}"))?,
-        AuthUrl::new(format!("{base_url}/authorize"))?,
-        JsonWebKeySetUrl::new(format!("{base_url}/.well-known/jwks"))?,
+        IssuerUrl::from_url(base_url.clone()),
+        AuthUrl::from_url(base_url.join("authorize")?),
+        JsonWebKeySetUrl::from_url(base_url.join(".well-known/jwks")?),
         vec![
             // Recommended: support the code flow.
             ResponseTypes::new(vec![CoreResponseType::Code]),
@@ -282,7 +282,7 @@ async fn inner_well_known_openid_configuration(
         EmptyAdditionalProviderMetadata {},
     )
     // Specify the token endpoint (required for the code flow).
-    .set_token_endpoint(Some(TokenUrl::new(format!("{base_url}/token"))?));
+    .set_token_endpoint(Some(TokenUrl::from_url(base_url.join("token")?)));
 
     Ok(Json(provider_metadata))
 }
