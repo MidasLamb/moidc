@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use axum::{
     extract::{Query, Request},
     http::StatusCode,
-    response::Redirect,
+    response::{Html, Redirect},
     routing::{any, get, post},
     Extension, Form, Json, Router,
 };
@@ -49,6 +49,7 @@ pub async fn generate_router(settings: settings::Settings) -> Router {
     };
 
     let app = Router::new()
+        .route("/form", get(form))
         .route("/authorize", get(authorize))
         .route("/token", post(token_handler))
         .route("/.well-known/jwks", get(jwks))
@@ -60,6 +61,39 @@ pub async fn generate_router(settings: settings::Settings) -> Router {
         .layer(TraceLayer::new_for_http());
 
     app
+}
+
+async fn form(
+    Query(auth): Query<AuthorizeQuery>,
+    Extension(state): Extension<Arc<State>>,
+) -> Html<String>{
+    let action = state.settings.base_url.join("authorize").unwrap();
+    let mut hidden_keys = String::new();
+    for (k, v) in auth.into_hashmap() {
+        hidden_keys.push_str(&format!(
+        r#"
+             <div class="form-example">
+                <input type="text" name="{k}" id="{k}" value="{v}" />
+              </div>
+        "#
+    ))
+    }
+    let body = format!(r#"
+        <form action="{action}", method="get">
+             <div class="form-example">
+                <label for="login_hint">Enter the login_hint (email): </label>
+                <input type="email" name="login_hint" id="login_hint" required />
+              </div>
+              <div style="display:none">
+                {hidden_keys} 
+              </div>
+              <div class="form-example">
+                <input type="submit" value="Subscribe!" />
+              </div>
+        </form>
+    "#);
+
+    Html(body)
 }
 
 #[axum::debug_handler]
@@ -192,7 +226,29 @@ struct AuthorizeQuery {
     redirect_uri: String,
     scope: String,
     nonce: String,
-    login_hint: String,
+    login_hint: Option<String>,
+}
+
+impl AuthorizeQuery {
+    fn into_hashmap(self) -> HashMap<&'static str, String> {
+        let mut h = HashMap::new();
+        h.insert("response_type", self.response_type);
+        h.insert("client_id", self.client_id);
+        h.insert("state", self.state);
+        if let Some(code_challenge) = self.code_challenge {
+            h.insert("code_challenge", code_challenge);
+        }
+        if let Some(code_challenge_method) = self.code_challenge_method {
+            h.insert("code_challenge_method", code_challenge_method);
+        }
+        h.insert("redirect_uri", self.redirect_uri);
+        h.insert("scope", self.scope);
+        h.insert("nonce", self.nonce);
+        if let Some(login_hint) = self.login_hint {
+            h.insert("login_hint", login_hint);
+        }
+        h
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -218,8 +274,11 @@ impl CodeState {
     }
 }
 
-#[tracing::instrument]
-async fn authorize(Query(auth): Query<AuthorizeQuery>) -> Redirect {
+#[tracing::instrument(skip(state))]
+async fn authorize(
+    Extension(state): Extension<Arc<State>>,
+    Query(auth): Query<AuthorizeQuery>
+) -> Redirect {
     // Do something and redirect back, with a code!
     // In order to be stateless, we must pass some state along here, so we can
     // give a proper response once they call to exchange the token for proper idtoken etc.
@@ -229,9 +288,18 @@ async fn authorize(Query(auth): Query<AuthorizeQuery>) -> Redirect {
 
     // We must also pass along some state back immediately here:
     // * State
+    let Some(login_hint) = auth.login_hint else {
+        let hm = auth.into_hashmap();
+        let mut url = state.settings.base_url.join("form").unwrap();
+        
+        for (k,v) in hm {
+            url.query_pairs_mut().append_pair(k, &v);     
+        }
+        return Redirect::to(url.as_str());
+    };
     let code = CodeState {
         nonce: auth.nonce,
-        user_to_log_in: auth.login_hint,
+        user_to_log_in: login_hint,
         client_id: auth.client_id,
     }
     .to_url_query_parameter();
