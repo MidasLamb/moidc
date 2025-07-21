@@ -8,7 +8,7 @@ You won't have to provision any users, every user is logged in without requiring
 
 # WARNING
 THIS IS NOT A REAL OIDC SERVER. IT IS INTENDED FOR TESTING PURPOSES ONLY.
-SINCE THERE IS NOT 
+SINCE THERE IS NO ACTUAL AUTHENTICATION HAPPENING.
 
 # Features
 * passwordless logins
