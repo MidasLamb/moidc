@@ -10,7 +10,7 @@ pub struct Settings {
     pub per_user_settings: HashMap<String, PerUserSettings>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct PerUserSettings {
     pub groups: Vec<String>,
 }
