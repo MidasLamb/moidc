@@ -37,7 +37,7 @@ struct State {
 pub async fn generate_router(settings: settings::Settings) -> Router {
     use tower_http::trace::TraceLayer;
 
-    let private = tokio::fs::read_to_string("./private-key.pem")
+    let private = tokio::fs::read_to_string(std::env::var("MOIDC_PRIVATE_KEY_PATH").unwrap_or("./private-key.pem".to_string()))
         .await
         .unwrap();
 
