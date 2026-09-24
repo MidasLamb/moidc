@@ -1,11 +1,10 @@
 use std::{collections::HashMap, sync::Arc};
 
 use axum::{
-    extract::{Query, Request},
-    http::StatusCode,
+    extract::Query,
     response::{Html, Redirect},
-    routing::{any, get, post},
-    Extension, Form, Json, Router,
+    routing::{get, post},
+    Form, Json, Router,
 };
 use rsa::pkcs1::EncodeRsaPrivateKey;
 use rsa::pkcs8::DecodePrivateKey;
@@ -15,40 +14,70 @@ use rsa::RsaPrivateKey;
 use chrono::{Duration, Utc};
 use openidconnect::{
     core::{
-        CoreGenderClaim, CoreIdToken, CoreIdTokenClaims, CoreIdTokenFields, CoreJsonWebKey,
+        CoreGenderClaim, CoreJsonWebKey,
         CoreJsonWebKeySet, CoreJsonWebKeyType, CoreJweContentEncryptionAlgorithm,
         CoreJwsSigningAlgorithm, CoreProviderMetadata, CoreResponseType, CoreRsaPrivateSigningKey,
-        CoreSubjectIdentifierType, CoreTokenResponse, CoreTokenType,
+        CoreSubjectIdentifierType, CoreTokenType,
     },
-    AccessToken, Audience, AuthUrl, EmptyAdditionalClaims, EmptyAdditionalProviderMetadata,
-    EmptyExtraTokenFields, EndUserEmail, IdToken, IdTokenClaims, IdTokenFields, IssuerUrl,
-    JsonWebKeyId, JsonWebKeySetUrl, Nonce, ResponseTypes, StandardClaims, StandardTokenResponse,
+    AccessToken, Audience, AuthUrl, EmptyAdditionalProviderMetadata,
+    EmptyExtraTokenFields, EndUserEmail, IdToken, IdTokenClaims, IdTokenFields, IssuerUrl, JsonWebKeySetUrl, Nonce, ResponseTypes, StandardClaims, StandardTokenResponse,
     SubjectIdentifier, TokenUrl,
 };
 use serde::{ser::SerializeMap, Deserialize, Serialize};
+use tokio::sync::Mutex;
+
+use crate::settings::PerUserSettings;
 
 pub mod settings;
 
-struct State {
+struct InnerState {
     settings: settings::Settings,
     rsa_private_key: RsaPrivateKey,
+}
+
+#[derive(Clone)]
+struct State(Arc<Mutex<InnerState>>);
+
+impl State {
+    async fn base_url(&self) -> openidconnect::url::Url {
+        let inner = self.0.lock().await;
+        inner.settings.base_url.clone()
+    }
+
+    async fn rsa_private_key(&self) -> RsaPrivateKey {
+        let inner = self.0.lock().await;
+        inner.rsa_private_key.clone()
+    }
+
+    async fn per_user_settings(&self) -> HashMap<String, PerUserSettings> {
+        let inner = self.0.lock().await;
+        inner.settings.per_user_settings.clone()
+    }
+
+    async fn set_base_url(&self, base_url: openidconnect::url::Url) {
+        let mut inner = self.0.lock().await;
+        inner.settings.base_url = base_url
+    }
 }
 
 pub async fn generate_router(settings: settings::Settings) -> Router {
     use tower_http::trace::TraceLayer;
 
-    let private = tokio::fs::read_to_string(std::env::var("MOIDC_PRIVATE_KEY_PATH").unwrap_or("./private-key.pem".to_string()))
-        .await
-        .unwrap();
+    let private = tokio::fs::read_to_string(
+        std::env::var("MOIDC_PRIVATE_KEY_PATH").unwrap_or("./private-key.pem".to_string()),
+    )
+    .await
+    .unwrap();
 
     let rsa_private_key = RsaPrivateKey::from_pkcs8_pem(&private).unwrap();
 
-    let state = State {
+    let state = State(Arc::new(Mutex::new(InnerState {
         settings,
         rsa_private_key,
-    };
+    })));
 
-    let app = Router::new()
+    Router::new()
+        .route("/settings", post(set_settings))
         .route("/form", get(form))
         .route("/authorize", get(authorize))
         .route("/token", post(token_handler))
@@ -57,28 +86,41 @@ pub async fn generate_router(settings: settings::Settings) -> Router {
             "/.well-known/openid-configuration",
             get(well_known_openid_configuration),
         )
-        .layer(Extension(Arc::new(state)))
-        .layer(TraceLayer::new_for_http());
+        .layer(TraceLayer::new_for_http())
+        .with_state(state)
+}
 
-    app
+#[derive(Deserialize)]
+struct SetSettings {
+    base_url: Option<openidconnect::url::Url>,
+}
+
+async fn set_settings(
+    axum::extract::State(state): axum::extract::State<State>,
+    axum::Json(set_settings): axum::Json<SetSettings>,
+) {
+    if let Some(base_url) = set_settings.base_url {
+        state.set_base_url(base_url).await
+    }
 }
 
 async fn form(
     Query(auth): Query<AuthorizeQuery>,
-    Extension(state): Extension<Arc<State>>,
-) -> Html<String>{
-    let action = state.settings.base_url.join("authorize").unwrap();
+    axum::extract::State(state): axum::extract::State<State>,
+) -> Html<String> {
+    let action = state.base_url().await.join("authorize").unwrap();
     let mut hidden_keys = String::new();
     for (k, v) in auth.into_hashmap() {
         hidden_keys.push_str(&format!(
-        r#"
+            r#"
              <div class="form-example">
                 <input type="text" name="{k}" id="{k}" value="{v}" />
               </div>
         "#
-    ))
+        ))
     }
-    let body = format!(r#"
+    let body = format!(
+        r#"
         <form action="{action}", method="get">
              <div class="form-example">
                 <label for="login_hint">Enter the login_hint (email): </label>
@@ -91,17 +133,18 @@ async fn form(
                 <input type="submit" value="Subscribe!" />
               </div>
         </form>
-    "#);
+    "#
+    );
 
     Html(body)
 }
 
 #[axum::debug_handler]
 async fn token_handler(
-    Extension(state): Extension<Arc<State>>,
+    axum::extract::State(state): axum::extract::State<State>,
     f: Form<TokenRequest>,
 ) -> Json<MyTokenResponse> {
-    token_handler_int(&*state, f).await.unwrap()
+    token_handler_int(&state, f).await.unwrap()
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,11 +197,12 @@ async fn token_handler_int(
     Form(token_request): Form<TokenRequest>,
 ) -> anyhow::Result<Json<MyTokenResponse>> {
     let secret_document = state
-        .rsa_private_key
+        .rsa_private_key()
+        .await
         .to_pkcs1_pem(rsa::pkcs8::LineEnding::LF)
         .unwrap();
 
-    let base_url = &state.settings.base_url;
+    let base_url = state.base_url().await;
 
     let code_state = CodeState::from_url_query_parameter(&token_request.code);
 
@@ -169,8 +213,8 @@ async fn token_handler_int(
     let (normal_email, additional_things) = first.split_once('+').unwrap_or((first, ""));
     let reconstructed_email = format!("{}@{}", normal_email, domain);
     let mut groups = state
-        .settings
-        .per_user_settings
+        .per_user_settings()
+        .await
         .get(&reconstructed_email)
         .map(|pus| pus.groups.clone())
         .unwrap_or(vec![]);
@@ -276,8 +320,8 @@ impl CodeState {
 
 #[tracing::instrument(skip(state))]
 async fn authorize(
-    Extension(state): Extension<Arc<State>>,
-    Query(auth): Query<AuthorizeQuery>
+    axum::extract::State(state): axum::extract::State<State>,
+    Query(auth): Query<AuthorizeQuery>,
 ) -> Redirect {
     // Do something and redirect back, with a code!
     // In order to be stateless, we must pass some state along here, so we can
@@ -290,10 +334,10 @@ async fn authorize(
     // * State
     let Some(login_hint) = auth.login_hint else {
         let hm = auth.into_hashmap();
-        let mut url = state.settings.base_url.join("form").unwrap();
-        
-        for (k,v) in hm {
-            url.query_pairs_mut().append_pair(k, &v);     
+        let mut url = state.base_url().await.join("form").unwrap();
+
+        for (k, v) in hm {
+            url.query_pairs_mut().append_pair(k, &v);
         }
         return Redirect::to(url.as_str());
     };
@@ -309,8 +353,8 @@ async fn authorize(
     ))
 }
 
-async fn jwks(Extension(state): Extension<Arc<State>>) -> Json<CoreJsonWebKeySet> {
-    let rsa_private = &state.rsa_private_key;
+async fn jwks(axum::extract::State(state): axum::extract::State<State>) -> Json<CoreJsonWebKeySet> {
+    let rsa_private = state.rsa_private_key().await;
 
     let key = CoreJsonWebKey::new_rsa(
         rsa_private.n().to_bytes_be(),
@@ -324,16 +368,14 @@ async fn jwks(Extension(state): Extension<Arc<State>>) -> Json<CoreJsonWebKeySet
 }
 
 async fn well_known_openid_configuration(
-    Extension(state): Extension<Arc<State>>,
+    axum::extract::State(state): axum::extract::State<State>,
 ) -> Json<CoreProviderMetadata> {
-    inner_well_known_openid_configuration(&*state)
-        .await
-        .unwrap()
+    inner_well_known_openid_configuration(&state).await.unwrap()
 }
 async fn inner_well_known_openid_configuration(
     state: &State,
 ) -> anyhow::Result<Json<CoreProviderMetadata>> {
-    let base_url = &state.settings.base_url;
+    let base_url = &state.base_url().await;
 
     let provider_metadata = CoreProviderMetadata::new(
         // Parameters required by the OpenID Connect Discovery spec.

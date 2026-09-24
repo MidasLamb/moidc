@@ -63,7 +63,7 @@
           };
           devShells.default = mkShell {
             inputsFrom = [bin];
-            buildInputs = with pkgs; [dive nix-tree];
+            buildInputs = with pkgs; [dive nix-tree rustToolchain rust-analyzer];
           };
         }
     );
