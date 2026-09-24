@@ -54,7 +54,7 @@ async fn shutdown_signal() {
 fn read_settings() -> Settings {
     let settings_path = std::env::var("MOIDC_SETTINGS").unwrap_or("./settings.yaml".to_string());
     let settings = Config::builder()
-        .add_source(config::File::with_name(&settings_path))
+        .add_source(config::File::with_name(&settings_path).required(false))
         .add_source(config::Environment::with_prefix("MOIDC"))
         .build()
         .unwrap();
