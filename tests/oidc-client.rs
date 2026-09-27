@@ -21,6 +21,7 @@ async fn test_client() -> anyhow::Result<()> {
         base_url: base_url.clone(),
         port: addr.port(),
         per_user_settings: HashMap::new(),
+        allow_setting_edits: true,
     })
     .await;
 

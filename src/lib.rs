@@ -2,7 +2,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use axum::{
     extract::Query,
-    response::{Html, Redirect},
+    http::StatusCode,
+    response::{Html, IntoResponse, Redirect},
     routing::{get, post},
     Form, Json, Router,
 };
@@ -14,14 +15,13 @@ use rsa::RsaPrivateKey;
 use chrono::{Duration, Utc};
 use openidconnect::{
     core::{
-        CoreGenderClaim, CoreJsonWebKey,
-        CoreJsonWebKeySet, CoreJsonWebKeyType, CoreJweContentEncryptionAlgorithm,
-        CoreJwsSigningAlgorithm, CoreProviderMetadata, CoreResponseType, CoreRsaPrivateSigningKey,
-        CoreSubjectIdentifierType, CoreTokenType,
+        CoreGenderClaim, CoreJsonWebKey, CoreJsonWebKeySet, CoreJsonWebKeyType,
+        CoreJweContentEncryptionAlgorithm, CoreJwsSigningAlgorithm, CoreProviderMetadata,
+        CoreResponseType, CoreRsaPrivateSigningKey, CoreSubjectIdentifierType, CoreTokenType,
     },
-    AccessToken, Audience, AuthUrl, EmptyAdditionalProviderMetadata,
-    EmptyExtraTokenFields, EndUserEmail, IdToken, IdTokenClaims, IdTokenFields, IssuerUrl, JsonWebKeySetUrl, Nonce, ResponseTypes, StandardClaims, StandardTokenResponse,
-    SubjectIdentifier, TokenUrl,
+    AccessToken, Audience, AuthUrl, EmptyAdditionalProviderMetadata, EmptyExtraTokenFields,
+    EndUserEmail, IdToken, IdTokenClaims, IdTokenFields, IssuerUrl, JsonWebKeySetUrl, Nonce,
+    ResponseTypes, StandardClaims, StandardTokenResponse, SubjectIdentifier, TokenUrl,
 };
 use serde::{ser::SerializeMap, Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -39,6 +39,11 @@ struct InnerState {
 struct State(Arc<Mutex<InnerState>>);
 
 impl State {
+    async fn allow_setting_edits(&self) -> bool {
+        let inner = self.0.lock().await;
+        inner.settings.allow_setting_edits
+    }
+
     async fn base_url(&self) -> openidconnect::url::Url {
         let inner = self.0.lock().await;
         inner.settings.base_url.clone()
@@ -98,10 +103,15 @@ struct SetSettings {
 async fn set_settings(
     axum::extract::State(state): axum::extract::State<State>,
     axum::Json(set_settings): axum::Json<SetSettings>,
-) {
+) -> StatusCode {
+    if !state.allow_setting_edits().await {
+        return StatusCode::FORBIDDEN;
+    }
+
     if let Some(base_url) = set_settings.base_url {
         state.set_base_url(base_url).await
     }
+    StatusCode::OK
 }
 
 async fn form(
