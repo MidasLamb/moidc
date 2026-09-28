@@ -47,12 +47,28 @@
           // {
             inherit cargoArtifacts;
           });
+	    muslPkgs = pkgs.pkgsCross.musl64;
+		muslBuild = muslPkgs.rustPlatform.buildRustPackage {
+		  pname = "moidc";
+		  version = "0.1.0";
+		  src = ./.;
+		  cargoLock.lockFile = ./Cargo.lock;
+		  # fully static musl binary, no runtime deps at all
+		};
+
+		appFiles = pkgs.runCommand "app-files" {} ''
+			    mkdir -p $out/app
+				cp ${./settings.yaml} $out/app/settings.yaml
+				cp ${./private-key.pem} $out/app/private-key.pem
+		'';
+
         dockerImage = pkgs.dockerTools.streamLayeredImage {
           name = "moidc";
           tag = "latest";
-          contents = [bin];
+          contents = [appFiles];
           config = {
-            Cmd = ["${bin}/bin/moidc"];
+            Entrypoint = ["${muslBuild}/bin/moidc"];
+			WorkingDir = "/app";
           };
         };
       in
